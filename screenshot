@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+# Usage: screenshot
+#
+# I cannot fathom why it is so complicated to take screenshots on
+# modern Linux desktop environments. This script implements my
+# preferred convention for screenshots, which is that there is a
+# system global hotkey that lets you select a screen region, then
+# copies the screenshot to the clipboard as well as saving it in a
+# properly lexicographically sorted manner to a screenshots folder.
+#
+# If you've got a better solution for this than cosmic-screenshot,
+# that still works on Wayland, I'm all ears. Because that ||: is
+# necessary to handle a segmentation fault that the program throws
+# every time, wtf.
+#
+# Setup: ln -s /tmp/doesnotexist ~/Pictures/Screenshots
+
+file="${HOME}/files/screenshots/$(date +%Y%m%d%H%M%S).png"
+mkdir -p "$(dirname "${file}")"
+if command -v cosmic-screenshot &>/dev/null; then
+    if ! [[ -L ~/Pictures/Screenshots && ! -e ~/Pictures/Screenshots ]]; then
+        echo >&2 "Need to set up ~/Pictures/Screenshots as broken symlink, first"
+        exit 1
+    fi
+    wl-copy -t image/png -c
+    cosmic-screenshot --notify=false ||:
+    wl-paste -t image/png > "${file}" ||:
+    if [[ ! -s "${file}" ]]; then
+        rm -f "${file}"
+        echo >&2 "Failed to save screenshot"
+        if [[ ! -t 1 ]]; then
+            timeout -sINT 1 notify-send -w "Failed to save screenshot" ||:
+        fi
+        exit 1
+    fi
+    echo >&2 "Successfully saved screenshot"
+    echo "${file}"
+elif command -v gnome-screenshot &>/dev/null; then
+    gnome-screenshot -a -f "${file}"
+    xclip -selection clipboard -t image/png -i "${file}"
+elif command -v spectacle &>/dev/null; then
+    spectacle -b -r -o "${file}" -n
+    xclip -selection clipboard -t image/png -i "${file}"
+else
+    echo >&2 "command not found: gnome-screenshot (or spectacle, cosmic-screenshot)"
+    exit 1
+fi

@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+
+# Usage: apk-backup
+#
+# This makes a backup of all the installed APKs on your Android phone,
+# because Google implemented an ass-backwards, self-serving, defective
+# architecture where it is borderline impossible to find the previous
+# version of an app you installed after the upgrade turns out to be
+# nonfunctional. Run this script before every system upgrade and it
+# will make a nice timestamped JSON report with the versions of all
+# your apps, as well as extracting the actual APKs (deduplicated so
+# that you can run this multiple times and not get multiple copies of
+# the same version of the same app).
+
+set -euo pipefail
+
+log() {
+    echo "[apk-backup] $(date +%H:%M:%S)" "$@"
+}
+
+ts="$(date +%Y-%m-%d-%H-%M-%S)"
+
+log "Using timestamp ${ts}"
+
+mkdir -p ~/.cache/apk-backup
+cd ~/.cache/apk-backup
+
+mkdir -p applists
+
+log "Getting list of installed packages..."
+
+allpkgs="$(
+
+adb shell pm list packages -3 -i --show-versioncode &&
+adb shell pm list packages -i --show-versioncode | grep -E 'grapheneos|attestation|android.messaging'
+
+)"
+
+pkgs="$(sed -E <<< "${allpkgs}" 's/^package:([^ ]+) +versionCode:([^ ]+) +installer=([^ ]+)$/pkg \1 \2 \3/')"
+
+if grep -v '^pkg' >&2 <<< "${pkgs}"; then
+    echo >&2 "fatal: bad line format from pm list packages"
+    exit 1
+fi
+
+jq <<< "${pkgs}" -Rs 'split("\n") | map(split(" ") | select(length == 4) | {name: .[1], version: .[2], installer: .[3]}) | sort_by(.name) | unique' > "applists/${ts}.json"
+
+log "Getting list of installed packages... found $(jq length < "applists/${ts}.json")"
+
+mkdir -p apks
+find apks -name "*.tmp" | xargs rm -rf
+jq < "applists/${ts}.json" '.[] | "\(.name) \(.version)"' -r | while read -r pkg ver; do
+    if [[ -d "apks/${pkg}/${ver}" ]]; then
+        continue
+    fi
+    log "Copying new APK(s) for ${pkg} version ${ver}..."
+    mkdir -p "apks/${pkg}/${ver}.tmp"
+    apks="$(adb shell pm path "${pkg}" </dev/null | sed 's/^package://')"
+    while read -r apk; do
+        filename="$(basename "${apk}")"
+        adb pull "${apk}" "apks/${pkg}/${ver}.tmp/${filename}"
+    done <<< "${apks}"
+    mv "apks/${pkg}/${ver}.tmp" "apks/${pkg}/${ver}"
+    log "Copying new APK(s) for ${pkg} version ${ver}... got $(wc -l <<< "${apks}")"
+done
+
+ln -sf "applists/${ts}.json" applist.json
+
+log "Finished!"

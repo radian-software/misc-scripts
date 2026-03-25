@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+# Usage: see below
+#
+# This is a successor to
+# <https://github.com/radian-software/madeline>, which I wrote after I
+# realized that the entire project could basically be superseded by
+# two tiny shell functions. Really the issue Madeline was solving was
+# two separate issues: offloading rarely-used giant files, and
+# offloading rarely-used directories with too many inodes. For the
+# former issue, I realized there were just not that many of them, and
+# I could create a manual organization scheme on my NAS for them. For
+# the latter issue, I realized that the files didn't need to
+# physically *go* anywhere, they just needed to not have so many
+# inodes. Thus a simple pair of shell functions that tars and untars
+# the pathname you give it. One nice thing is that because this is
+# uncompressed tar, you can change the contents and re-tar, and Borg
+# will still mostly deduplicate. Probably.
+#
+# alias bp='badeline put'
+# alias bg='badeline get'
+
+usage() {
+    cat <<"EOF" >&2
+usage:
+  badeline get ARCHIVE.bad.tar
+  badeline put DIRECTORY
+EOF
+}
+
+if (( "$#" == 0 )); then
+    usage
+    exit 1
+fi
+
+do_get() {
+    if (( "$#" != 1 )) || [[ "$1" != *.bad.tar ]]; then
+        usage
+        exit 1
+    elif [[ ! -f "$1" ]]; then
+        echo >&2 "fatal: not a file: $1"
+        exit 1
+    fi
+    target="${1%%.bad.tar}"
+    if [[ -e "${target}" || -L "${target}" ]]; then
+        echo >&2 "fatal: already exists: ${target}"
+        exit 1
+    fi
+    tar -C "$(dirname "$1")" -xf "$1"
+    rm "$1"
+    echo >&2 "extracted $(basename "$1")"
+}
+
+do_put() {
+    if (( "$#" != 1 )); then
+        usage
+        exit 1
+    elif [[ ! -d "$1" ]]; then
+        echo >&2 "fatal: no such directory: $1"
+        exit 1
+    fi
+    (
+        unset CDPATH
+        cd "$1"
+        target="$(basename "$PWD")"
+        cd ..
+        tar -cf "${target}.bad.tar" "${target}"
+        rm -rf "${target}"
+        echo >&2 "archived ${target}.bad.tar"
+    )
+}
+
+cmd="$1"
+shift
+
+case "${cmd}" in
+    get)
+        do_get "$@"
+        ;;
+    put)
+        do_put "$@"
+        ;;
+    *)
+        usage
+        exit 1
+        ;;
+esac

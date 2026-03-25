@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+
+set -e
+set -o pipefail
+
+# Usage: see below
+#
+# This is an interactive/noninteractive script for wrapping SANE and
+# ImageMagick to interface with my ScanSnap scanner. You can pass a
+# variety of different tokens defined in the argument parser below to
+# choose a set of options (monochrome/color, letter-size/long-page,
+# simplex/duplex), or alternatively you can specify interactive mode
+# to let you enter any of those tokens, scan a document with them, and
+# let you enter new options or press return to repeat the same. Don't
+# forget about the option to open each document after scanning, like I
+# forgot about it for several years after implementing.
+
+die() {
+    echo "$@" 1>&2
+    exit 1
+}
+
+color=""
+duplex=""
+open=""
+interactive=""
+long=""
+
+for arg; do
+    case "$arg" in
+    -) ;;
+    gray | g | m | monochrome | bw | b | w | -b | -g | -m) color= ;;
+    color | c | rgb | -c) color=yes ;;
+    1 | s | simplex | 1sided | ss | -s | -1) duplex= ;;
+    duplex | double | 2 | 2sided | ds | -d | -2) duplex=yes ;;
+    1page | page | p) long= ;;
+    l | long) long=yes ;;
+    1b)
+        ;;
+    1c)
+        color=yes
+        ;;
+    2b)
+        duplex=yes
+        ;;
+    2c)
+        color=yes
+        duplex=yes
+        ;;
+    1bl | 1l)
+        long=yes
+        ;;
+    1cl)
+        color=yes
+        long=yes
+        ;;
+    2bl | 2l)
+        duplex=yes
+        long=yes
+        ;;
+    2cl)
+        color=yes
+        duplex=yes
+        long=yes
+        ;;
+    open | o | -o) open=yes ;;
+    interactive | i | int | -i | -int) interactive=yes ;;
+    *) die "unknown argument: $arg" ;;
+    esac
+done
+
+if [[ -n "$interactive" ]]; then
+    last_cmd=
+    while read -r cmd; do
+        if [[ "$cmd" == q* ]]; then
+            exit 0
+        fi
+        if [[ -n "$cmd" ]]; then
+            last_cmd="$cmd"
+        fi
+        scan $last_cmd || true
+    done
+    exit 0
+fi
+
+scandir="$HOME/files/scans"
+timestamp="$(date +%Y%m%d%H%M%S)"
+target="${scandir}/${timestamp}.pdf"
+
+if [[ ! -d "$scandir" ]]; then
+    die "not a directory: $scandir"
+fi
+
+tmpdir="$(mktemp -d)"
+trap 'rm -rf $tmpdir' EXIT
+cd "$tmpdir"
+
+args=(
+    --device="fujitsu:ScanSnap iX500:1377846"
+    # Note that if we don't override the batch filename format,
+    # documents of 10 or more pages will get out of order due to
+    # lexicographic sorting in the shell.
+    --batch="out%05d.pnm" --format=pnm --resolution=300
+)
+
+if [[ -n "$color" ]]; then
+    args=("${args[@]}" --mode=Color)
+fi
+
+if [[ -n "$duplex" ]]; then
+    args=("${args[@]}" --source="ADF Duplex")
+fi
+
+if [[ -n "$long" ]]; then
+    # What a mess. It's really unclear why these parameters are all
+    # needed but they are. Output to PNG or JPEG also fails, but only
+    # in ALD mode. For ALD you need to do PNM. See
+    # <https://alioth-lists.debian.net/pipermail/sane-devel/2015-January/032999.html>.
+    args=(
+        "${args[@]}"
+        --ald=yes --buffermode=On
+        --page-height=1000mm -y 1000mm
+    )
+fi
+
+scanimage "${args[@]}"
+
+magick ./*.pnm scan.pdf
+
+# If stdout is redirected to a file, write to it. Otherwise just save
+# a file to the standard directory.
+if [[ -t 1 ]]; then
+    mv scan.pdf "$target"
+    if [[ -n "$open" ]]; then
+        if command -v open &>/dev/null; then
+            open "$target"
+        else
+            xdg-open "$target" &>/dev/null
+        fi
+    fi
+else
+    cat scan.pdf
+fi

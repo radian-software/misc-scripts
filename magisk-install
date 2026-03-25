@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+# Usage: magisk-install
+#
+# This script downloads the appropriate version of the GrapheneOS
+# stock ROM that matches your device, copies it to the device to be
+# patched via Magisk, and then copies it back and flashes.
+#
+# Note that this probably isn't very useful since Magisk no longer
+# works with GrapheneOS. I personally migrated to KernelSU instead.
+
+log() {
+    echo >&2 "magisk-install:" "$@"
+}
+
+get_device_version() {
+    while true; do
+        ver="$(adb shell getprop ro.product.build.version.incremental 2>/dev/null ||:)"
+        if [[ -n "${ver}" ]]; then
+            echo "${ver}"
+            break
+        fi
+        echo >&2 -n "Could not connect to device; please connect and press [enter]"
+        read -r
+    done
+}
+
+log "Checking device version..."
+graphene_ver="$(get_device_version)"
+log "Device version: ${graphene_ver}"
+
+download_url="https://releases.grapheneos.org/bluejay-install-${graphene_ver}.zip"
+
+cache_dir="${XDG_CACHE_HOME:-${HOME}/.cache}/magisk-install"
+mkdir -p "${cache_dir}/downloads"
+(
+    cd "${cache_dir}/downloads"
+    if [[ ! -f "graphene-${graphene_ver}.zip" ]]; then
+        log "Downloading upstream release..."
+        wget "${download_url}" -O "graphene-${graphene_ver}.zip.tmp"
+        mv "graphene-${graphene_ver}.zip.tmp" "graphene-${graphene_ver}.zip"
+        log "Finished downloading release"
+    else
+        log "Release already downloaded, reusing cached"
+    fi
+    if [[ ! -f "graphene-${graphene_ver}-boot.img" ]]; then
+        log "Extracting upstream release..."
+        rm -rf "graphene-${graphene_ver}.tmp"
+        unzip "graphene-${graphene_ver}.zip" "bluejay-install-${graphene_ver}/boot.img" -d "graphene-${graphene_ver}.tmp"
+        touch "graphene-${graphene_ver}.tmp/bluejay-install-${graphene_ver}/boot.img"
+        mv "graphene-${graphene_ver}.tmp/bluejay-install-${graphene_ver}/boot.img" "graphene-${graphene_ver}-boot.img"
+        rm -rf "graphene-${graphene_ver}.tmp"
+        log "Finished extracting release"
+    else
+        log "Release already extracted, reusing cached"
+    fi
+)
+
+log "Computing md5 checksum of boot image..."
+boot_image="${cache_dir}/downloads/graphene-${graphene_ver}-boot.img"
+boot_image_checksum="$(md5sum "${boot_image}" | awk '{print $1}')"
+download_dir="/storage/emulated/0/Download"
+log "Checksum: ${boot_image_checksum}"
+
+log "Checking whether boot image has been copied to device already..."
+if [[ "$(adb shell md5sum "${download_dir}/graphene-${graphene_ver}-boot.img" 2>/dev/null | awk '{print $1}' ||:)" != "${boot_image_checksum}" ]]; then
+    log "Copying boot image to device..."
+    adb push "${boot_image}" "${download_dir}/graphene-${graphene_ver}-boot.img"
+    log "Copied boot image to device"
+else
+    log "Boot image already copied to device, reusing"
+fi
+
+get_patched_image() {
+    (
+        set +o pipefail
+        adb shell ls -lArt "${download_dir}" | sed "1,/graphene-${graphene_ver}-boot.img/d" | awk '{print $8}' | grep magisk_patched | tail -n1
+    )
+}
+
+log "Checking for image patched by Magisk..."
+while true; do
+    patched_image="$(get_patched_image 2>/dev/null ||:)"
+    if [[ -n "${patched_image}" ]]; then
+        break
+    fi
+    echo >&2 -n "Could not find image patched by Magisk; please run in-app patcher and press [enter]"
+    read -r
+done
+
+mkdir -p "${cache_dir}/patched"
+log "Copying patched image from device..."
+adb pull "${download_dir}/${patched_image}" "${cache_dir}/patched/${patched_image}"
+log "Finished copying patched image"
+
+log "Clearing previous images patched by Magisk..."
+adb shell rm -f "${download_dir}/graphene-*-boot.img"
+log "Finished clearing previous images"
+
+log "Rebooting device into bootloader..."
+adb reboot bootloader
+
+log "Waiting for fastboot to become available..."
+while true; do
+    if fastboot devices | grep -q .; then
+        break
+    fi
+    sleep 1
+done
+log "Fastboot is available"
+
+log "Flashing boot image..."
+fastboot flash boot "${cache_dir}/patched/${patched_image}"
+log "Finished flashing boot image"
+
+log "Rebooting with new boot image..."
+fastboot reboot
+log "Rebooted, Magisk should now be active"

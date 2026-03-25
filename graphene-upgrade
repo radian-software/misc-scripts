@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+# Usage: graphene-upgrade
+#
+# This script checks the latest version of GrapheneOS, compares it to
+# what's on your device, then flashes it using the OTA package.
+
+log() {
+    echo >&2 "graphene-upgrade:" "$@"
+}
+
+get_device_version() {
+    local ver
+    while true; do
+        ver="$(adb shell getprop ro.product.build.version.incremental 2>/dev/null ||:)"
+        if [[ -n "${ver}" ]]; then
+            echo "${ver}"
+            break
+        fi
+        echo >&2 -n "Could not connect to device; please connect and press [enter]"
+        read -r
+    done
+}
+
+log "Checking device version..."
+installed_ver="$(get_device_version)"
+log "Device version: ${installed_ver}"
+
+log "Checking latest release..."
+latest_url="$(curl -fsSL https://grapheneos.org/releases | grep -Eo 'https://releases.grapheneos.org/bluejay-ota_update-[0-9]+\.zip' | head -n1)"
+latest_ver="$(grep <<< "${latest_url}" -Eo '[0-9]+' | tail -n1)"
+log "Latest release: ${latest_ver}"
+
+if [[ "${installed_ver}" == "${latest_ver}" ]]; then
+    log "Already running latest version, not upgrading"
+    exit 0
+fi
+
+cache_dir="${XDG_CACHE_HOME:-${HOME}/.cache}/magisk-install"
+mkdir -p "${cache_dir}/downloads"
+(
+    cd "${cache_dir}/downloads"
+    if [[ ! -f "graphene-${latest_ver}-ota.zip" ]]; then
+        log "Downloading upstream release..."
+        wget "${latest_url}" -O "graphene-${latest_ver}-ota.zip.tmp"
+        mv "graphene-${latest_ver}-ota.zip.tmp" "graphene-${latest_ver}-ota.zip"
+        log "Finished downloading release"
+    else
+        log "Release already downloaded, reusing cached"
+    fi
+)
+ota_zip="${cache_dir}/downloads/graphene-${latest_ver}-ota.zip"
+
+log "Rebooting device into recovery..."
+adb reboot recovery
+
+echo >&2 "After boot, hold power button and press volume up. Select 'Apply update from ADB'."
+echo >&2 -n "Type [enter] after doing so to proceed..."
+read -r
+
+log "Sideloading OTA update..."
+adb sideload "${ota_zip}"
+
+log "Finished upgrade script, please boot and let apps optimize"

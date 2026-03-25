@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+# Usage: see below
+#
+# This is for use in a cron job that you want to run only occasionally
+# but have it run as soon as possible if a run is missed. Kind of like
+# anacron I think. Except I guess I never learned to use that. Anyway,
+# it works with frequencies more than once per day as well.
+
+if (( "$#" < 2 )); then
+    echo >&2 "usage: run-with-interval 'TIME INTERVAL' CMD [ARG]..."
+    exit 1
+fi
+
+interval="$1"
+shift
+tsfile="${HOME}/.cache/radian-local/$(sha1sum <<< "$*" | awk '{print $1}')"
+tsdir="$(dirname "${tsfile}")"
+
+if [[ -f "${tsfile}" ]] && last="$(< "${tsfile}")"; then
+    expected="$(date -d "${interval} ago" +%s)"
+    if (( "${last}" > "${expected}" )); then
+        echo >&2 "run-with-interval: last run at $(date -d @"${last}"), has not been ${interval} yet, skipping"
+        exit 0
+    fi
+fi
+
+"$@"
+
+mkdir -p "${tsdir}"
+date +%s > "${tsfile}"

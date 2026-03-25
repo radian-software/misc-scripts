@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+# Usage: see below
+#
+# This is a simple script implementing some missing subcommands from
+# Pass, most notably a straightforward noninteractive way to update a
+# password without overwriting additional metadata/TOTP, and commands
+# to extract just the password or just the OTP seed rather than the
+# whole file.
+
+if [[ -n "${PASS_UTIL_EDITOR:-}" ]]; then
+    sed -i "1s/.*/$(sed <<< "${PASS_UTIL_NEW_PASS}" 's/[\/&]/\\&/g')/" "$1"
+    exit
+fi
+
+usage() {
+    cat <<"EOF" >&2
+usage:
+  pass-util [passwd]      example.com/user@example.com [linum]
+  pass-util [passwd-]set  example.com/user@example.com  new-password
+  pass-util  otp          example.com/user@example.com
+  pass-util  otp-code     example.com/user@example.com
+EOF
+    exit 1
+}
+
+case "$#" in
+    0) usage ;;
+    1) cmd="passwd" ;;
+    2) if [[ "$2" =~ ^[0-9]+$ ]]; then
+           cmd="passwd"
+       else
+           cmd="$1"; shift
+       fi ;;
+    3) cmd="$1"; shift ;;
+    *) usage ;;
+esac
+
+case "${cmd}" in
+    passwd) pass "$1" | sed -n "${2:-1}"p ;;
+    set|passwd-set) PASS_UTIL_EDITOR=1 PASS_UTIL_NEW_PASS="$2" EDITOR="$0" pass edit "$1" ;;
+    otp) pass "$1" | sed -nr 's|^otpauth://.*secret=([^&]+).*|\1|p' ;;
+    otp-code) pass otp "$1" ;;
+    *) usage ;;
+esac

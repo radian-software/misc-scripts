@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+
+# Usage: cron-unfuck PROG [ARG...]
+#
+# Just stick "cron-unfuck" in front of every line in your crontab, and
+# watch problems go away. Basically, this script attempts to restore a
+# somewhat more sane execution environment than cron natively
+# provides, and then runs the provided command. Note that it exec's
+# directly, so if you have a shell cmdline, provide the shell too.
+#
+# Things this does:
+# * Eat all the output so that cron won't spam your MTA, and redirect
+#   it to a logfile instead.
+# * Add timestamps and metadata about command being executed to the
+#   log.
+# * Rotate the logfile if it gets too big.
+# * Execute your ~/.profile so normal $PATH and envvars get setup.
+# * Setup envvars for connecting to graphical environment, so stuff
+#   like zenity will work out of the box.
+
+if [[ -f /tmp/cron.log ]]; then
+    logfile_mb="$(du -m /tmp/cron.log | awk '{print $1}')"
+    if (( "${logfile_mb}" > 10 )); then
+        tail < /tmp/cron.log -c5000000 > /tmp/cron.log.new
+        mv /tmp/cron.log.new /tmp/cron.log
+    fi
+fi
+
+{
+    echo
+    echo "[$(date)] cron-unfuck: invoking:" "$@"
+
+    export DISPLAY=":1"
+    if uid="$(id -u)"; then
+        export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${uid}/bus"
+        export XDG_RUNTIME_DIR="/run/user/${uid}"
+    fi
+
+    # shellcheck disable=SC1091
+    . "${HOME}/.profile"
+
+    "$@" 2>&1
+
+    echo "[$(date)] cron-unfuck: return code $?, finished invoking:" "$@"
+} 2>&1 >>/tmp/cron.log

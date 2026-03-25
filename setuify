@@ -1,0 +1,121 @@
+#!/usr/bin/env python3
+
+# Usage: setuify [-d, --debug] SCRIPT BINARY
+#
+# This one is cool. It takes a shell script and makes it a setuid
+# binary. You'd think you can just chmod a shell script to setuid, but
+# the kernel does not elevate privileges for such scripts, because of
+# a race condition nobody wants to figure out a good way to avoid, I
+# guess, where the file at the shell script path might change during
+# the time between the kernel reading the shebang and whatever program
+# mentioned there actually loading the file for real.
+#
+# The way this works is setuify reads the shebang itself, then
+# generates a C program that hardcodes the executable named there as
+# well as the entire file contents directly into a character array.
+# Then it compiles the script to a binary and marks it setuid via
+# sudo. Note that environment variables are cleared by the generated
+# binary before it executes, so you have to pass data by command-line
+# arguments or other means.
+
+import argparse
+import os
+from pathlib import Path
+import stat
+import subprocess
+import sys
+import tempfile
+
+parser = argparse.ArgumentParser("setuify")
+parser.add_argument("script")
+parser.add_argument("destination")
+parser.add_argument("-d", "--debug", action="store_true")
+args = parser.parse_args()
+
+script_path = Path(args.script).resolve()
+destination = Path(args.destination).resolve()
+
+if not destination.parent.resolve():
+    raise RuntimeError(f"not a directory: {destination.parent}")
+
+with open(args.script, "rb") as f:
+    script_text = f.read()
+
+first_eol = script_text.index(b"\n")
+shebang = script_text[:first_eol]
+if not shebang.startswith(b"#!"):
+    raise RuntimeError("no shebang")
+
+cmdline = shebang.removeprefix(b"#!").split()
+cmdline.extend([b"-c", script_text])
+
+c_strings = []
+for idx, arg in enumerate(cmdline):
+    arg += b"\0"
+    hex_codes = [f"{char:#04x}" for char in arg]
+    grouped_hex_codes = [
+        hex_codes[idx : idx + 12] for idx in range(0, len(hex_codes), 12)
+    ]
+    c_strings.append(
+        f"char script_argv{idx}[] = {{\n  "
+        + ",\n  ".join(", ".join(line) for line in grouped_hex_codes)
+        + "\n};"
+    )
+
+c_strings.append(
+    "char *const script_argv[] = {\n  "
+    + ",\n  ".join(f"script_argv{idx}" for idx in range(len(cmdline)))
+    + "\n};"
+)
+
+c_strings.append(f"int script_argc = {len(cmdline)};")
+
+argv_code = "\n\n".join(c_strings)
+
+c_code = r"""
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+ARGV_CODE_HERE
+
+int main(int user_argc, char **user_argv)
+{
+  if (clearenv() != 0) {
+    fprintf(stderr, "fatal: clearenv\n");
+    return 1;
+  }
+  if (setuid(0) != 0) {
+    fprintf(stderr, "fatal: setuid\n");
+    return 1;
+  }
+  char **full_argv = malloc(sizeof(char *) * (script_argc + user_argc + 1));
+  if (full_argv == NULL) {
+    fprintf(stderr, "fatal: malloc\n");
+    return 1;
+  }
+  memcpy(full_argv, script_argv, sizeof(char *) * script_argc);
+  memcpy(&full_argv[script_argc], user_argv, sizeof(char *) * user_argc);
+  full_argv[script_argc + user_argc] = NULL;
+  execv(full_argv[0], full_argv);
+  fprintf(stderr, "fatal: execv\n");
+  return 1;
+}
+
+""".strip().replace("ARGV_CODE_HERE", argv_code) + "\n"
+
+if args.debug:
+    print(c_code.strip(), file=sys.stderr)
+
+with tempfile.TemporaryDirectory() as tmpdir:
+    os.chdir(tmpdir)
+    out = Path("a.out")
+    subprocess.run(["gcc", "-xc", f"-o{out}", "-"], input=c_code.encode(), check=True)
+    out.chmod(out.stat().st_mode | stat.S_ISUID)
+    try:
+        destination.unlink()
+    except FileNotFoundError:
+        pass
+    subprocess.run(["sudo", "cp", "--preserve=mode", str(out), destination], check=True)
