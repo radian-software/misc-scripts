@@ -1,0 +1,150 @@
+#!/usr/bin/env zsh
+
+set -e
+set -o pipefail
+
+setopt dotglob
+setopt nullglob
+
+script_name=cronctl
+available=~/.config/cronctl/available
+enabled=~/.config/cronctl/enabled
+
+function die {
+    echo $script_name: $@ 1>&2
+    exit 1
+}
+
+function usage {
+    cat 1>&2 <<EOF
+usage: $script_name write
+       $script_name enable [<name>]
+       $script_name disable <name>
+       $script_name enabled
+       $script_name available
+EOF
+}
+
+function description {
+    cat 1>&2 <<EOF
+This script is used to manage the user crontab conveniently. Sections of the
+crontab are maintained in the ~/.config/cronctl/available/ subdirectory, and
+they can be enabled or disabled by basename using the 'enable' and
+'disable' subcommands of this script.
+
+When a job is enabled, its file is copied into the ~/.config/cronctl/enabled/
+directory. Then, all the files in that directory are concatenated and saved
+as the new crontab. When a job is disabled, its file is deleted and the
+crontab is updated. The 'write' subcommand is provided just for
+completeness; it updates the crontab from ~/.config/cronctl/enabled/ without
+doing anything else.
+
+The 'enabled' subcommand is provided for convenience; it just lists the
+contents of ~/.config/cronctl/enabled/. Similarly, the 'available' subcommand
+just lists the contents of ~/.config/cronctl/available/.
+
+The 'enable' command, when not given any arguments, runs 'cronctl enable' for
+all currently enabled jobs. This ensures that any changes to the configuration
+files are updated in the crontab.
+EOF
+}
+
+function write-crontab {
+    if [[ -d $enabled ]]; then
+        files=($enabled/*)
+        if ((${#files[@]})); then
+            cat ${files[@]} | grep . | grep -v '^#' | crontab -
+            return 0
+        fi
+    fi
+    crontab -r
+}
+
+function enable-job {
+    local job=$1
+    if [[ -f $available/$job ]]; then
+        mkdir -p $enabled
+        cp $available/$job $enabled/$job
+        write-crontab
+    else
+        die "no such file: $available/$job"
+    fi
+}
+
+function disable-job {
+    local job=$1
+    if [[ -f $enabled/$job ]]; then
+        rm $enabled/$job
+        write-crontab
+    else
+        die "no such file: $enabled/$job"
+    fi
+}
+
+function list-enabled {
+    if [[ -d $enabled ]]; then
+        ls -1A $enabled
+    fi
+}
+
+function list-available {
+    if [[ -d $available ]]; then
+        ls -1A $available
+    fi
+}
+
+if (($# == 0)); then
+    usage
+    exit 1
+fi
+
+if [[ $1 =~ '-h|-\?|-help|--help|help' ]]; then
+    usage
+    echo
+    description
+    exit 0
+fi
+
+subcommand=$1
+shift
+args=($@)
+
+function check-arg-count {
+    if ((${#args[@]} != $1)); then
+        usage
+        exit 1
+    fi
+}
+
+case $subcommand in
+write)
+    check-arg-count 0
+    write-crontab "$@"
+    ;;
+enable)
+    if (( $# == 0 )); then
+        list-enabled | while read -r job; do
+            enable-job ${job}
+        done
+    else
+        check-arg-count 1
+        enable-job "$@"
+    fi
+    ;;
+disable)
+    check-arg-count 1
+    disable-job "$@"
+    ;;
+enabled)
+    check-arg-count 0
+    list-enabled "$@"
+    ;;
+available)
+    check-arg-count 0
+    list-available "$@"
+    ;;
+*)
+    usage
+    exit 1
+    ;;
+esac
