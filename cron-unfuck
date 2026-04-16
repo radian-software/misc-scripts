@@ -30,10 +30,18 @@ fi
     echo
     echo "[$(date)] cron-unfuck: invoking:" "$@"
 
-    export DISPLAY=":1"
     if uid="$(id -u)"; then
         export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${uid}/bus"
         export XDG_RUNTIME_DIR="/run/user/${uid}"
+    fi
+
+    if command -v systemd-run &>/dev/null; then
+        env="$(systemd-run --user --pipe --collect -- env | (grep -E '^(DISPLAY|XAUTHORITY)=' ||:))"
+        while IFS='=' read -r var val; do
+            export "${var}=${val}"
+        done <<< "${env}"
+    else
+        export DISPLAY=":0"
     fi
 
     # shellcheck disable=SC1091
