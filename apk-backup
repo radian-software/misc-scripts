@@ -43,7 +43,7 @@ if grep -v '^pkg' >&2 <<< "${pkgs}"; then
     exit 1
 fi
 
-jq <<< "${pkgs}" -Rs 'split("\n") | map(split(" ") | select(length == 4) | {name: .[1], version: .[2], installer: .[3]}) | sort_by(.name) | unique' > "applists/${ts}.json"
+jq <<< "${pkgs}" -Rs 'split("\n") | map(split(" ") | select(length == 4) | {name: .[1], version: .[2], installer: .[3]}) | unique | sort_by(.name)' > "applists/${ts}.json"
 
 log "Getting list of installed packages... found $(jq length < "applists/${ts}.json")"
 
