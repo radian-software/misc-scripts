@@ -95,12 +95,14 @@ tmpdir="$(mktemp -d)"
 trap 'rm -rf $tmpdir' EXIT
 cd "$tmpdir"
 
+dpi="300"
+
 args=(
     --device="fujitsu:ScanSnap iX500:1377846"
     # Note that if we don't override the batch filename format,
     # documents of 10 or more pages will get out of order due to
     # lexicographic sorting in the shell.
-    --batch="out%05d.pnm" --format=pnm --resolution=300
+    --batch="out%05d.pnm" --format=pnm --resolution="${dpi}"
 )
 
 if [[ -n "$color" ]]; then
@@ -125,7 +127,7 @@ fi
 
 scanimage "${args[@]}"
 
-magick ./*.pnm scan.pdf
+magick ./*.pnm -density "${dpi}" -set units PixelsPerInch scan.pdf
 
 # If stdout is redirected to a file, write to it. Otherwise just save
 # a file to the standard directory.
