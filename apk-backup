@@ -31,8 +31,7 @@ log "Getting list of installed packages..."
 
 allpkgs="$(
 
-adb shell pm list packages -3 -i --show-versioncode &&
-adb shell pm list packages -i --show-versioncode | grep -E 'grapheneos|attestation|android.messaging'
+adb shell pm list packages -3 -i --show-versioncode
 
 )"
 
