@@ -18,7 +18,7 @@ fi
 usage() {
     cat <<"EOF" >&2
 usage:
-  pass-util [passwd]      example.com/user@example.com [linum]
+  pass-util [passwd]      example.com/user@example.com [linum|field]
   pass-util [passwd-]set  example.com/user@example.com  new-password
   pass-util  otp          example.com/user@example.com
   pass-util  otp-code     example.com/user@example.com
@@ -29,7 +29,7 @@ EOF
 case "$#" in
     0) usage ;;
     1) cmd="passwd" ;;
-    2) if [[ "$2" =~ ^[0-9]+$ ]]; then
+    2) if [[ "$1" =~ / ]]; then
            cmd="passwd"
        else
            cmd="$1"; shift
@@ -39,7 +39,17 @@ case "$#" in
 esac
 
 case "${cmd}" in
-    passwd) pass "$1" | sed -n "${2:-1}"p ;;
+    passwd)
+        out="$(pass "$1")"
+        if [[ "${2:-1}" =~ ^[0-9]+$ ]]; then
+            sed <<< "${out}" -n "${2:-1}"p
+        elif [[ "$2" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+            grep <<< "${out}" "^$2: *" | sed "s|^$2: *||"
+        else
+            echo >&2 "illegal characters in key name: $2"
+            exit 1
+        fi
+        ;;
     set|passwd-set) PASS_UTIL_EDITOR=1 PASS_UTIL_NEW_PASS="$2" EDITOR="$0" pass edit "$1" ;;
     otp) pass "$1" | sed -nr 's|^otpauth://.*secret=([^&]+).*|\1|p' ;;
     otp-code) pass otp "$1" ;;
